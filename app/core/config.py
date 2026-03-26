@@ -3,16 +3,13 @@ from pydantic import Field
 
 
 class Settings(BaseSettings):
-    # 🌐 Environment
+   
     ENV: str = Field(default="dev")    
     
-    # 🔑 Auth
     CRM_AUTH_KEY: str = Field(default="")
 
-    # 📱 Default Values
     DEFAULT_MOBILE: str = Field(default="2320000000")
 
-    # 🤖 Gemini
     GEMINI_API_KEY: str = Field(default="")
 
     GEMINI_MODEL:str = Field(default="")
@@ -22,14 +19,10 @@ class Settings(BaseSettings):
     
     HTTP_TIMEOUT: int = Field(default=10)
     MAX_RETRIES: int = Field(default=3)
-
-    # 🎯 Dynamic URL selector
   
 
     class Config:
         env_file = ".env"
         extra = "ignore"
 
-
-# ✅ Singleton instance
 settings = Settings()

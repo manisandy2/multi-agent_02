@@ -1,22 +1,22 @@
-from google import genai
-import os
 import logging
-from app.core.config import Settings
-logger = logging.getLogger(__name__)
+from typing import Optional
+from google import genai
+from app.core.config import settings
 
-settings = Settings()
+logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
-
-def generate_reply(prompt: str) -> str:
+def generate_reply(prompt: str) -> Optional[str]:
     try:
-        model = genai.GenerativeModel(settings.GEMINI_MODEL)
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=settings.GEMINI_MODEL,
+            contents=prompt,
+        )
 
         if not response.text:
-            raise ValueError("Empty response")
+            raise ValueError("Empty response from Gemini")
 
         return response.text.strip()
 
