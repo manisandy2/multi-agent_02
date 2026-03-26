@@ -1,9 +1,9 @@
 from langgraph.graph import StateGraph, END
 
 from app.graph.state import ReviewState
-from app.graph.nodes.supervisor import supervisor_node
-from app.graph.nodes.complaint import complaint_node
-from app.graph.nodes.reply import reply_node
+from app.graph.nodes.supervisor_node import supervisor_node
+from app.graph.nodes.complaint_node import complaint_node
+from app.graph.nodes.reply_node import reply_node
 from app.graph.router import route_decision
 
 
