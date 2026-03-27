@@ -1,70 +1,55 @@
-import asyncio
 import logging
 from typing import Optional
+from utility.helper import _call_gemini
+from app.prompts.reply_prompt import REPLY_PROMPT
 
-from google import genai
-
-from app.core.config import Settings
-
-settings = Settings()
 logger = logging.getLogger(__name__)
 
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
-REPLY_PROMPT = """
-You are a customer support assistant.
+def build_prompt(review, rating, reviewer, store, complaint_link):
+    clean_review = " ".join(review.strip().split())
+    safe_review = clean_review.replace("{", "{{").replace("}", "}}")
 
-Write a professional reply to a customer review.
+    instruction = f"- Include this support link: {complaint_link}" if complaint_link else ""
 
-Rules:
-- Single paragraph
-- 60–80 words
-- No markdown
-- No "Dear"
-- No closing (no Regards)
-- Do NOT over-apologize
-
-Customer: {reviewer}
-Store: {store}
-Rating: {rating}
-Review: "{review}"
-
-Instructions:
-- Positive (rating >= 4) → thank the customer
-- Neutral (rating == 3) → acknowledge the feedback
-- Negative (rating <= 2) → apologize and assure resolution
-{complaint_instruction}
-"""
+    return REPLY_PROMPT.format(
+        reviewer=reviewer or "Customer",
+        store=store,
+        rating=rating,
+        review=safe_review,
+        complaint_instruction=instruction,
+    )
 
 
-def _get_complaint_instruction(complaint_link: Optional[str]) -> str:
-    if complaint_link:
-        return f"- Include this support link: {complaint_link}"
-    return ""
 
-
-def _fallback_reply(rating: int, store: str) -> str:
+def fallback_reply(rating: int, store: str,complaint_link:Optional[str] = None) -> str:
     if rating >= 4:
         return (
             f"Thank you for your feedback! We're glad you had a great experience at {store}. "
             f"We look forward to serving you again."
         )
     if rating <= 2:
-        return (
-            f"We sincerely apologize for your experience at {store}. We understand your concern "
-            f"and will work towards resolving it. Please contact our support team for assistance."
+        base = (
+            f"We sincerely apologize for your experience at {store}. "
+            f"We understand your concern and will work towards resolving it."
         )
+        if complaint_link:
+            base += f" You can reach us here: {complaint_link}"
+        return base
     return (
         f"Thank you for your feedback. We appreciate your input and will continue "
-        
+        f"to improve our services at {store}."
     )
 
-def _validate_reply(reply: str) -> str:
+def validate_reply(reply: str) -> str:
     #  enforce single paragraph
     reply = reply.replace("\n", " ").strip()
-
-    #  enforce length (soft trim)
     words = reply.split()
+
+    # enforce minimum length
+    if len(words) < 20:
+        return ""
+
     if len(words) > 90:
         reply = " ".join(words[:80])
 
@@ -77,29 +62,31 @@ async def reply_agent(
     reviewer: str,
     store: str,
     complaint_link: Optional[str] = None,
-    ticket_id: Optional[str] = None,
 ) -> str:
-    prompt = REPLY_PROMPT.format(
-        reviewer=reviewer,
-        store=store,
-        rating=rating,
-        review=review,
-        complaint_instruction=_get_complaint_instruction(complaint_link),
-    )
+   
+    prompt = build_prompt(review, rating, reviewer, store, complaint_link)
 
     try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=settings.GEMINI_MODEL,
-            contents=prompt,
-        )
+        response = await _call_gemini(prompt)
 
         reply = response.text.strip() if response.text else ""
-        if not reply:
-            raise ValueError("Empty reply from Gemini")
+
+        if not reply or len(reply) < 10:
+            raise ValueError("Invalid reply from Gemini")
 
     except Exception as e:
-        logger.error(f"Reply agent failed: {e}")
-        reply = _fallback_reply(rating, store)
+        logger.error(
+            "Reply agent failed",
+            extra={"rating": rating, "store": store, "error": str(e)}
+        )
+        return fallback_reply(rating, store, complaint_link)
+
+    reply = validate_reply(reply)
+
+    if not reply:
+        return fallback_reply(rating, store, complaint_link)
+
+    if complaint_link and complaint_link.lower() not in reply.lower():
+        reply = reply.rstrip(".") + f". You can reach us here: {complaint_link}"
 
     return reply
