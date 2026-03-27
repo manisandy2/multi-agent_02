@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import date
+from typing import Dict,Any,Optional
  
 import httpx
  
@@ -60,49 +61,92 @@ def _build_complaint_payload(
         "complaintantExpectation": review_text[:300],
         "complaintantAdvocateDetails": {},
     }
- 
+
+def _extract_ticket_id(response: dict) -> Optional[str]:
+    return (
+        response.get("data", {})
+        .get("complainAndEnquirySaved", {})
+        .get("complain", {})
+        .get("id")
+    )
+
  
 async def create_complaint(
     location_name: str,
     reviewer_name: str,
     review_date: date,
     review_text: str,
+    job_id: Optional[str] = None,
     url: str = None,
     retries: int = 3,
 ) -> dict:
     url = url or settings.STAGE_URL
     headers = _build_headers()
+
     files = {
         "enquiry": (None, json.dumps(_build_enquiry_payload(location_name))),
         "complain": (None, json.dumps(_build_complaint_payload(
             location_name, reviewer_name, review_date, review_text
         ))),
     }
- 
-    for attempt in range(retries):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+    
+    async with httpx.AsyncClient(timeout=10.0, connect=5.0) as client:
+
+        for attempt in range(retries):
+            try:
+                logger.info(f"[{job_id}] CRM attempt {attempt+1}")
+
                 response = await client.post(url, headers=headers, files=files)
                 response.raise_for_status()
- 
+
                 try:
                     data = response.json()
-                    print(data)
                 except Exception:
-                    logger.error("Invalid JSON in CRM response")
-                    return {"status": "error", "message": "Invalid response format"}
- 
-                logger.info(f"Complaint created for {location_name}")
-                return {"status": "success", "data": data}
- 
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP {e.response.status_code}: {e.response.text}")
-        except httpx.RequestError as e:
-            logger.error(f"Network error: {e}")
-        except Exception:
-            logger.exception("Unexpected error during complaint creation")
- 
-        await asyncio.sleep(2 ** attempt)
- 
-    logger.error(f"Complaint creation failed after {retries} attempts")
-    return {"status": "failed", "message": "Complaint creation failed after retries"}
+                    logger.error(f"[{job_id}] Invalid JSON response")
+                    return {
+                        "status": "failed",
+                        "message": "Invalid CRM response format"
+                    }
+
+                ticket_id = _extract_ticket_id(data)
+
+                if not ticket_id:
+                    logger.error(
+                        f"[{job_id}] Missing ticket_id",
+                        extra={"response": data}
+                    )
+                    return {
+                        "status": "failed",
+                        "message": "Missing ticket_id",
+                        "data": data
+                    }
+
+                logger.info(f"[{job_id}] Complaint created: {ticket_id}")
+
+                return {
+                    "status": "created",
+                    "ticket_id": ticket_id,
+                    "data": data,
+                }
+
+            except httpx.HTTPStatusError as e:
+                logger.error(
+                    f"[{job_id}] HTTP {e.response.status_code}",
+                    extra={"body": e.response.text}
+                )
+
+            except httpx.RequestError as e:
+                logger.error(f"[{job_id}] Network error: {repr(e)}")
+
+            except Exception:
+                logger.exception(f"[{job_id}] Unexpected CRM error")
+
+            # exponential backoff
+            await asyncio.sleep(2 ** attempt)
+
+    logger.error(f"[{job_id}] Complaint failed after {retries} retries")
+
+    return {
+        "status": "failed",
+        "message": "Complaint creation failed after retries"
+    }

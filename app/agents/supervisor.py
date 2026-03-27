@@ -5,7 +5,7 @@ from typing import Dict
 
 from google import genai
 from pydantic import ValidationError
-from utility.helper import _call_gemini
+from app.utility.helper import _call_gemini
 from app.core.config import Settings
 from app.schemas.supervisor import SupervisorResponse
 from app.prompts.supervisor_prompt import SUPERVISOR_PROMPT
@@ -26,8 +26,6 @@ STRONG_NEGATIVE_KEYWORDS = [
     "fraud", "cheated", "scam", "worst experience",
     "never again", "very bad", "pathetic",
 ]
-
-
 
 
 def _parse_json(text: str) -> Dict | None:
@@ -131,15 +129,19 @@ async def supervisor_ai(review: str, rating: int) -> Dict:
 
         validated = SupervisorResponse(**parsed)
         print(f"Validated supervisor output: {validated.model_dump()}")
+
         data = validated.model_dump()
+        # print("supervisier:",data)
         if data["severity"] == "low" and data["create_ticket"]:
             logger.warning("Fixing inconsistent AI output")
             data["create_ticket"] = False
             data["action"] = "reply"
+
         return data
     except (ValidationError, ValueError) as e:
         logger.warning(f"Supervisor validation error: {e}")
     except Exception as e:
+        
         logger.error(
             "Supervisor AI error",
             extra={

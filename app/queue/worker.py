@@ -68,7 +68,7 @@ async def _handle_complaint(job_id: str, data: dict, decision: dict) -> dict:
         data["reviewer"],
         data["location_name"],
         complaint_link=complaint_link,
-        ticket_id=ticket_id,
+        # ticket_id=ticket_id,
     )
 
     logger.info(f"[{job_id}] Complaint + reply completed")
@@ -77,7 +77,7 @@ async def _handle_complaint(job_id: str, data: dict, decision: dict) -> dict:
         "job_id": job_id,
         "status": "success",
         "type": "complaint_and_reply",
-        "ticket_id": ticket_id,
+        # "ticket_id": ticket_id,
         "complaint_link": complaint_link,
         "reply": reply,
         "decision": decision,

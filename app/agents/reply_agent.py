@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from utility.helper import _call_gemini
+from app.utility.helper import _call_gemini
 from app.prompts.reply_prompt import REPLY_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ async def reply_agent(
         return fallback_reply(rating, store, complaint_link)
 
     reply = validate_reply(reply)
-
+    # print("reply",reply)
     if not reply:
         return fallback_reply(rating, store, complaint_link)
 
