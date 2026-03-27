@@ -50,7 +50,7 @@ def build_reply_template(
         opening = random.choice(NEUTRAL_OPENINGS)
 
         body = (
-            f"{opening} We appreciate your feedback regarding your experience at {store}. "
+            
             f"We are continuously working to improve and provide better service. "
             f"Thank you for sharing your thoughts, and we hope to serve you even better next time."
         )

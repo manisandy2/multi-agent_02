@@ -1,9 +1,10 @@
 import asyncio
 import logging
 from typing import Optional
-from google import genai
-from app.core.config import Settings
 
+from google import genai
+
+from app.core.config import Settings
 
 settings = Settings()
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ Rules:
 - No markdown
 - No "Dear"
 - No closing (no Regards)
+- Do NOT over-apologize
 
 Customer: {reviewer}
 Store: {store}
@@ -68,32 +70,6 @@ def _validate_reply(reply: str) -> str:
 
     return reply
 
-async def _generate_with_retry(prompt: str, retries: int = 2) -> str:
-    for attempt in range(retries + 1):
-        try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.models.generate_content,
-                    model=settings.GEMINI_MODEL,
-                    contents=prompt,
-                ),
-                timeout=30,  # timeout protection
-            )
-
-            text = response.text.strip() if response.text else ""
-
-            if not text:
-                raise ValueError("Empty response")
-
-            return text
-
-        except Exception as e:
-            logger.warning(f"Gemini attempt {attempt+1} failed: {e}")
-
-            if attempt == retries:
-                raise
-
-            await asyncio.sleep(1)  # small backoff
 
 async def reply_agent(
     review: str,
@@ -112,9 +88,15 @@ async def reply_agent(
     )
 
     try:
-        raw_reply = await _generate_with_retry(prompt)
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=settings.GEMINI_MODEL,
+            contents=prompt,
+        )
 
-        reply = _validate_reply(raw_reply)
+        reply = response.text.strip() if response.text else ""
+        if not reply:
+            raise ValueError("Empty reply from Gemini")
 
     except Exception as e:
         logger.error(f"Reply agent failed: {e}")
