@@ -8,14 +8,19 @@ from app.utility.helper import build_complaint_link
 
 logger = logging.getLogger(__name__)
 
+# =========================
+# Main Entry
+# =========================
 
-async def process_review_task(data):
+async def process_review_task(data:dict) -> dict:
     job_id = data.get("job_id")
+    print(f"[{job_id}] Starting review processing task")
 
     try:
-        decision = await supervisor_ai(
-            data["review"], data["rating"]
-        )
+        decision = await supervisor_ai(data["review"], data["rating"], data.get("reviewer", "anonymous"))
+        decision = _enforce_rules(decision, data["rating"])
+        
+        logger.info(f"[{job_id}] Final decision: {decision}")
 
         if decision.get("create_ticket"):
             return await _handle_complaint(job_id, data, decision)
@@ -23,13 +28,28 @@ async def process_review_task(data):
         return await _handle_reply(job_id, data, decision)
 
     except Exception as e:
-        logger.exception(f"[{job_id}] Task failed")
+        logger.exception(f"[{job_id}] Supervisor failed")
 
         return _error_response(
             job_id=job_id,
             message="Supervisor failed",
             details=str(e),
         )
+    
+# =========================
+# Rule Enforcement
+# =========================
+def _enforce_rules(decision: dict, rating: int) -> dict:
+    print(f"Enforcing rules for rating: {rating}")
+    if rating <= 2:
+        decision["create_ticket"] = True
+        decision["action"] = "complaint_and_reply"
+        decision["severity"] = "high"
+    else:
+        decision["create_ticket"] = False
+        decision["action"] = "reply"
+
+    return decision
 
 
 # =========================
@@ -52,8 +72,9 @@ async def _handle_complaint(job_id: str, data: dict, decision: dict) -> dict:
 
         return {
             "job_id": job_id,
-            "status": "partial_success",
+            "status": "success",
             "type": "reply_only",
+            "complaint_link": complaint_link,
             "error": ticket,
             "reply": reply,
             "decision": decision,
@@ -88,32 +109,45 @@ async def _handle_complaint(job_id: str, data: dict, decision: dict) -> dict:
 # Reply Only Flow
 # =========================
 async def _handle_reply(job_id: str, data: dict, decision: dict) -> dict:
-    try:
-        reply = await reply_agent(
-            data["review"],
-            data["rating"],
-            data["reviewer"],
-            data["location_name"],
-        )
+    print(f"[{job_id}] Handling reply flow with decision: {decision}")
+    logger.info(f"[{job_id}] Handling reply flow")
 
-        logger.info(f"[{job_id}] Reply generated")
+    reply = await _safe_reply(data)
 
-        return {
-            "job_id": job_id,
-            "status": "success",
-            "type": "reply",
-            "reply": reply,
-            "decision": decision,
-        }
+    return {
+        "job_id": job_id,
+        "status": "success",
+        "type": "reply",
+        "reply": reply,
+        "decision": decision,
+    }
 
-    except Exception as e:
-        logger.exception(f"[{job_id}] Reply generation failed")
+# =========================
+# Safe Reply (Retry + Fallback)
+# =========================
+async def _safe_reply(data: dict, complaint_link: str = None) -> str:
+    print(f"Generating reply for review: '{data['review'][:50]}...' with rating: {data['rating']}")
+    for attempt in range(2):
+        try:
+            reply = await reply_agent(
+                data["review"],
+                data["rating"],
+                data.get("reviewer"),
+                data.get("location_name"),
+                complaint_link=complaint_link,
+            )
 
-        return _error_response(
-            job_id=job_id,
-            message="Reply agent failed",
-            details=str(e),
-        )
+            if reply and isinstance(reply, str):
+                return reply.strip()
+
+        except Exception as e:
+            logger.warning(f"Reply retry {attempt + 1} failed: {e}")
+
+    # ✅ Final fallback reply
+    return (
+        "We sincerely apologize for your experience. "
+        "Your concern has been noted and will be addressed."
+    )
 
 
 # =========================

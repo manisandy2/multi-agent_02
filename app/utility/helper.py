@@ -17,19 +17,24 @@ def build_complaint_link(ticket_id: str) -> str:
 
 
 async def _call_gemini(prompt: str, retries: int = 2):
+    print(f"Calling Gemini with prompt: '{prompt[:50]}...'")
     for attempt in range(retries):
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(
+            print(f"Attempt {attempt+1} to call Gemini")
+            
+            response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=settings.GEMINI_MODEL,
-                    contents=prompt,
-                ),
-                timeout=8,
-            )
+                    contents=[prompt],
+                )
+                
+            if response and getattr(response, "text", None):
+                return response
+            raise ValueError("Empty response from Gemini")
+
         except Exception as e:
+            logger.warning(f"Gemini retry {attempt+1} failed: {e}")
             if attempt == retries - 1:
                 raise
-            wait_time = 2 ** attempt
-            logger.warning(f"Reply retry {attempt+1} failed: {e}")
-            await asyncio.sleep(wait_time)
+
+            await asyncio.sleep(2 ** attempt)
