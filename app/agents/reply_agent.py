@@ -5,8 +5,12 @@ from app.prompts.reply_prompt import REPLY_PROMPT
 
 logger = logging.getLogger(__name__)
 
+# =========================
+# Prompt Builder
+# =========================
 
 def build_prompt(review, rating, reviewer, store, complaint_link):
+    review = review or ""
     clean_review = " ".join(review.strip().split())
     safe_review = clean_review.replace("{", "{{").replace("}", "}}")
 
@@ -14,15 +18,20 @@ def build_prompt(review, rating, reviewer, store, complaint_link):
 
     return REPLY_PROMPT.format(
         reviewer=reviewer or "Customer",
-        store=store,
+        store=store or "our store",
         rating=rating,
         review=safe_review,
         complaint_instruction=instruction,
     )
 
 
+# =========================
+# Fallback Reply
+# =========================
 
 def fallback_reply(rating: int, store: str,complaint_link:Optional[str] = None) -> str:
+    store = store or "our store"
+
     if rating >= 4:
         return (
             f"Thank you for your feedback! We're glad you had a great experience at {store}. "
@@ -30,8 +39,8 @@ def fallback_reply(rating: int, store: str,complaint_link:Optional[str] = None) 
         )
     if rating <= 2:
         base = (
-            f"We sincerely apologize for your experience at {store}. "
-            f"We understand your concern and will work towards resolving it."
+            f"We’re sorry to hear about your experience at {store}. "
+            f"We truly understand your concern and are working to make things right."
         )
         if complaint_link:
             base += f" You can reach us here: {complaint_link}"
@@ -40,6 +49,10 @@ def fallback_reply(rating: int, store: str,complaint_link:Optional[str] = None) 
         f"Thank you for your feedback. We appreciate your input and will continue "
         f"to improve our services at {store}."
     )
+
+# =========================
+# Validation
+# =========================
 
 def validate_reply(reply: str) -> str:
     #  enforce single paragraph
@@ -51,11 +64,14 @@ def validate_reply(reply: str) -> str:
         return ""
 
     if len(words) > 90:
-        reply = " ".join(words[:80])
+        reply = " ".join(words[:90])
 
     return reply
 
 
+# =========================
+# Reply Agent
+# =========================
 async def reply_agent(
     review: str,
     rating: int,
@@ -67,26 +83,29 @@ async def reply_agent(
     prompt = build_prompt(review, rating, reviewer, store, complaint_link)
 
     try:
-        response = await _call_gemini(prompt)
+        llm_result = await _call_gemini(prompt)
 
-        reply = response.text.strip() if response.text else ""
-
+        if llm_result.get("status") != "success":
+            raise ValueError("LLM failed")
+         
+        reply = llm_result.get("content", "").strip()
+        
         if not reply or len(reply) < 10:
-            raise ValueError("Invalid reply from Gemini")
+            raise ValueError("Invalid reply")
+        
 
     except Exception as e:
         logger.error(
-            "Reply agent failed",
-            extra={"rating": rating, "store": store, "error": str(e)}
+            f"Reply agent failed | rating={rating}, store={store}, review={review[:50]}, error={e}"
         )
         return fallback_reply(rating, store, complaint_link)
 
     reply = validate_reply(reply)
-    # print("reply",reply)
+    
     if not reply:
         return fallback_reply(rating, store, complaint_link)
 
-    if complaint_link and complaint_link.lower() not in reply.lower():
-        reply = reply.rstrip(".") + f". You can reach us here: {complaint_link}"
+    if complaint_link and complaint_link not in reply:
+        reply = reply.rstrip(". ") + f". You can reach us here: {complaint_link}"
 
     return reply
