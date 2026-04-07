@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from app.utility.helper import _call_gemini
+from app.services.gemini_service import _call_gemini
 from app.prompts.reply_prompt import REPLY_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def validate_reply(reply: str) -> str:
     words = reply.split()
 
     # enforce minimum length
-    if len(words) < 20:
+    if len(words) < 10:
         return ""
 
     if len(words) > 90:

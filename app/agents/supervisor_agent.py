@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Dict
 from pydantic import ValidationError
-from app.utility.helper import _call_gemini
+from app.services.gemini_service import _call_gemini
 from app.schemas.supervisor import SupervisorResponse
 from app.prompts.supervisor_prompt import SUPERVISOR_PROMPT
 import re
@@ -37,7 +37,7 @@ def _parse_json(text: str) -> Dict | None:
 # Fallback
 # =========================
 
-def _fallback_decision(review: str, rating: int) -> Dict:
+def _fallback_decision(review: str, rating: int,reviewer: str, store: str) -> Dict:
     if rating <= 2:
         return {
             "classification": {"sentiment": "negative", "issue_type": "other", "rating": rating},
@@ -51,21 +51,40 @@ def _fallback_decision(review: str, rating: int) -> Dict:
         }
 
     return {
-        "classification": {"sentiment": "positive", "issue_type": "other", "rating": rating},
+        "classification": {
+            "sentiment": "positive" if rating >= 4 else "neutral" if rating == 3 else "negative",
+            "issue_type": "other", 
+            "rating": rating},
         "issues": [],
-        "severity": "low",
-        "action": "reply",
-        "create_ticket": False,
-        "response": "Thank you for your feedback!",
+        "severity": "low" if rating >= 3 else "high",
+        "action": "reply" if rating >= 3 else "complaint",
+        "create_ticket": rating <= 2,
+        "response": _fallback_response_text(review, rating, reviewer, store),
         "confidence": 0.5, 
         "reason": "fallback"
     }
+
+def _fallback_response_text(review: str, rating: int, reviewer: str, store: str) -> str:
+
+    name = reviewer or "Customer"
+    store_name = store or "our store"
+
+    # Positive
+    if rating >= 4:
+        return f"Hi {name}, thank you for your positive feedback about {store_name}. We’re glad you had a good experience and look forward to serving you again."
+
+    # Neutral
+    if rating == 3:
+        return f"Hi {name}, thank you for your feedback about {store_name}. We appreciate your input and will use it to improve our service."
+
+    # Negative
+    return f"Hi {name}, we’re sorry to hear about your experience at {store_name}. Please share more details so we can look into this and assist you further."
 
 # =========================
 # Supervisor Agent
 # =========================
     
-async def supervisor_ai(
+async def supervisor_agent(
         review: str,
         rating: int,
         reviewer: str = "anonymous",
@@ -75,9 +94,9 @@ async def supervisor_ai(
         ) -> Dict:
     
     try:
-        if mode not in ["decision", "validate"]:
-            logger.warning(f"Unknown mode: {mode}, defaulting to decision")
-            mode = "decision"
+        if mode not in ["analyze", "validate"]:
+            logger.warning(f"Unknown mode: {mode}, defaulting to analyze")
+            mode = "analyze"
 
         review = " ".join((review or "").strip().split())
         safe_review = review.replace("{", "{{").replace("}", "}}")
@@ -95,13 +114,35 @@ async def supervisor_ai(
 
             issues = []
 
-            if len(words) < 15:
+            # =========================
+            # HARD SAFETY CHECK
+            # =========================
+            banned = [
+                "refund processed",
+                "legal action",
+                "guarantee",
+                "100%",
+                "we will compensate",
+                "you are right we made a mistake"
+            ]
+
+            if any(b in text for b in banned):
+                logger.warning("Validation failed: unsafe claim detected")
+
+                return {
+                    "approved": False,
+                    "corrected_reply": "Thank you for your feedback. Please contact our support team for further assistance.",
+                    "issues": ["unsafe_claim"]
+                }
+    
+            if len(words) < 10:
                 logger.warning("Validation failed: too short")
                 issues.append("too short")
 
-            if not any(w in text for w in ["thank", "thanks", "appreciate", "grateful"]):
-                logger.warning("Validation failed: missing gratitude")
-                issues.append("missing gratitude")
+            if rating >= 3:
+                if not any(w in text for w in ["thank", "thanks", "appreciate", "grateful"]):
+                    logger.warning("Validation failed: missing gratitude")
+                    issues.append("missing gratitude")
 
             if rating <= 2 and not any(w in text for w in ["sorry", "apologize", "apologies", "regret"]):
                 logger.warning("Validation failed: missing apology")
@@ -116,13 +157,13 @@ async def supervisor_ai(
             # 🔥 AUTO FIX (THIS WAS MISSING)
             corrected = reply.strip()
 
-            if "thank" not in text:
+            if "thank" not in text and rating >= 3:
                 corrected = "Thank you for your feedback. " + corrected
 
             if rating <= 2 and not any(w in text for w in ["sorry", "apologize", "apologies", "regret"]):
                 corrected = "We sincerely apologize for your experience. " + corrected
 
-            if len(corrected.split()) < 15:
+            if len(corrected.split()) < 10:
                 corrected += " We truly value your feedback and will work on improving our service."
 
             logger.warning(f"Reply corrected: {issues}")
@@ -182,4 +223,4 @@ async def supervisor_ai(
         "corrected_reply": "Thank you for your feedback. We will look into this."
     }
     
-    return _fallback_decision(review or "", rating)
+    return _fallback_decision(review or "", rating,reviewer, store)
