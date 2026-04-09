@@ -3,8 +3,8 @@ import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException
-from app.queue.worker import process_review_task
-from app.schemas.review import ReviewRequest
+from app.services.orchestrator import process_review_task
+from app.schemas.review_schema import ReviewRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -29,7 +29,7 @@ async def process_review(payload: ReviewRequest):
     try:
         logger.info(f"[{job_id}] Process start")
         # Run the task synchronously with a 30-second timeout
-        result = await asyncio.wait_for(process_review_task(data), timeout=30.0)
+        result = await asyncio.wait_for(process_review_task(data), timeout=130.0)
         
         logger.info(f"[{job_id}] Process completed successfully")
         return {

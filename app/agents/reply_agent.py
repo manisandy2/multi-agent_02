@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from app.services.gemini_service import _call_gemini
+from app.services.gemini_service import call_gemini
 from app.prompts.reply_prompt import REPLY_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -9,10 +9,9 @@ logger = logging.getLogger(__name__)
 # Prompt Builder
 # =========================
 
-def build_prompt(review, rating, reviewer, store, complaint_link):
+def build_prompt(review: str | None, rating: int, reviewer: str | None, store: str | None, complaint_link: str | None) -> str:
     review = review or ""
-    clean_review = " ".join(review.strip().split())
-    safe_review = clean_review.replace("{", "{{").replace("}", "}}")
+    safe_review = " ".join(review.strip().split())
 
     instruction = f"- Include this support link: {complaint_link}" if complaint_link else ""
 
@@ -64,7 +63,7 @@ def validate_reply(reply: str) -> str:
         return ""
 
     if len(words) > 90:
-        reply = " ".join(words[:90])
+        reply = " ".join(words[:90]) + "..."
 
     return reply
 
@@ -83,7 +82,7 @@ async def reply_agent(
     prompt = build_prompt(review, rating, reviewer, store, complaint_link)
 
     try:
-        llm_result = await _call_gemini(prompt)
+        llm_result = await call_gemini(prompt)
 
         if llm_result.get("status") != "success":
             raise ValueError("LLM failed")
@@ -96,7 +95,7 @@ async def reply_agent(
 
     except Exception as e:
         logger.error(
-            f"Reply agent failed | rating={rating}, store={store}, review={review[:50]}, error={e}"
+            f"Reply agent failed | rating={rating}, store={store}, review={str(review)[:50] if review else 'None'}, error={e}"
         )
         return fallback_reply(rating, store, complaint_link)
 

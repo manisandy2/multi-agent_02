@@ -3,7 +3,9 @@ import logging
 from fastapi import FastAPI
 from app.api.routers import router as process_router
 
-logger = logging.getLogger(__name__)
+from app.core.logger import setup_logger
+
+setup_logger()
 
 app = FastAPI(title="Multi Agent Review System")
 

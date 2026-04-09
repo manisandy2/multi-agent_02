@@ -21,6 +21,7 @@ class CRMErrorCodes:
 
 
 async def complaint_agent(data):
+    print("Creating complaint ##############################################")
     headers = {
         "platform": "web",
         "Authorization": f"App {settings.CRM_AUTH_KEY}",
@@ -108,7 +109,7 @@ async def complaint_agent(data):
                     "details": response.text
                 }
 
-            logger.info(f"CRM response: {result}")
+            # logger.info(f"CRM response: {result}")
 
             complain_data = result.get("data", {}) \
                 .get("complainAndEnquirySaved", {}) \

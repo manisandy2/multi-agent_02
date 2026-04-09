@@ -2,9 +2,10 @@ import json
 import logging
 from typing import Dict
 from pydantic import ValidationError
-from app.services.gemini_service import _call_gemini
+from app.services.gemini_service import call_gemini
 from app.schemas.supervisor import SupervisorResponse
 from app.prompts.supervisor_prompt import SUPERVISOR_PROMPT
+from app.prompts.compliance_prompt import COMPLIANCE_PROMPT
 import re
 
 logger = logging.getLogger(__name__)
@@ -12,10 +13,17 @@ logger = logging.getLogger(__name__)
 # =========================
 # JSON Parser
 # =========================
-def _parse_json(text: str) -> Dict | None:
+def _parse_json(text: str) -> Dict | list | None:
     if not text:
         return None
 
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
     text = text.strip()
 
     try:
@@ -24,7 +32,7 @@ def _parse_json(text: str) -> Dict | None:
         pass
 
     # Fallback: extract JSON block
-    match = re.search(r"\{.*?\}", text, re.DOTALL)
+    match = re.search(r"(\{.*?\}|\[.*?\])", text, re.DOTALL)
     if not match:
         return None
 
@@ -37,7 +45,7 @@ def _parse_json(text: str) -> Dict | None:
 # Fallback
 # =========================
 
-def _fallback_decision(review: str, rating: int,reviewer: str, store: str) -> Dict:
+def _fallback_decision(review: str, rating: int, reviewer: str, store: str) -> Dict:
     if rating <= 2:
         return {
             "classification": {"sentiment": "negative", "issue_type": "other", "rating": rating},
@@ -45,22 +53,22 @@ def _fallback_decision(review: str, rating: int,reviewer: str, store: str) -> Di
             "severity": "high",
             "action": "complaint",
             "create_ticket": True,
-            "response": "We sincerely apologize. Your issue will be addressed.",
+            "response": _fallback_response_text(review, rating, reviewer, store),
             "confidence": 0.5,
             "reason": "fallback"
         }
 
     return {
         "classification": {
-            "sentiment": "positive" if rating >= 4 else "neutral" if rating == 3 else "negative",
-            "issue_type": "other", 
+            "sentiment": "positive" if rating >= 4 else "neutral",
+            "issue_type": "other",
             "rating": rating},
         "issues": [],
-        "severity": "low" if rating >= 3 else "high",
-        "action": "reply" if rating >= 3 else "complaint",
-        "create_ticket": rating <= 2,
+        "severity": "low",
+        "action": "reply",
+        "create_ticket": False,
         "response": _fallback_response_text(review, rating, reviewer, store),
-        "confidence": 0.5, 
+        "confidence": 0.5,
         "reason": "fallback"
     }
 
@@ -89,10 +97,10 @@ async def supervisor_agent(
         rating: int,
         reviewer: str = "anonymous",
         store: str = "unknown",
-        reply: str = None,
-        mode: str = "decision"   # "full" for classification + response, "
+        reply: str | None = None,
+        mode: str = "analyze"   # "full" for classification + response, "
         ) -> Dict:
-    
+    print(f"Supervisor Agent called with review: {review}, rating: {rating}, reviewer: {reviewer}, store: {store}, mode: {mode}")   
     try:
         if mode not in ["analyze", "validate"]:
             logger.warning(f"Unknown mode: {mode}, defaulting to analyze")
@@ -109,69 +117,28 @@ async def supervisor_agent(
                 return {"approved": False, 
                         "corrected_reply": "Thank you for your feedback. We will look into this."}
 
-            text = reply.lower()
-            words = text.split()
+            compliance_prompt = COMPLIANCE_PROMPT.format_map(
+                {"review": safe_review,
+                 "rating": rating,
+                 "reply": reply}
+            )
 
-            issues = []
+            validation_result = await call_gemini(compliance_prompt, agent_name="compliance_agent", expect_json=True)
 
-            # =========================
-            # HARD SAFETY CHECK
-            # =========================
-            banned = [
-                "refund processed",
-                "legal action",
-                "guarantee",
-                "100%",
-                "we will compensate",
-                "you are right we made a mistake"
-            ]
+            if not validation_result or validation_result.get("status") != "success":
+                raise ValueError("LLM compliance validation failed")
 
-            if any(b in text for b in banned):
-                logger.warning("Validation failed: unsafe claim detected")
+            val_parsed = validation_result.get("content")
 
-                return {
-                    "approved": False,
-                    "corrected_reply": "Thank you for your feedback. Please contact our support team for further assistance.",
-                    "issues": ["unsafe_claim"]
-                }
-    
-            if len(words) < 10:
-                logger.warning("Validation failed: too short")
-                issues.append("too short")
-
-            if rating >= 3:
-                if not any(w in text for w in ["thank", "thanks", "appreciate", "grateful"]):
-                    logger.warning("Validation failed: missing gratitude")
-                    issues.append("missing gratitude")
-
-            if rating <= 2 and not any(w in text for w in ["sorry", "apologize", "apologies", "regret"]):
-                logger.warning("Validation failed: missing apology")
-                issues.append("missing apology")
-            
-            if not issues:
-                logger.info(f"Validation passed (rating={rating})")
-                return {"approved": True}
-            
-            logger.warning(f"Validation issues: {issues}")
-
-            # 🔥 AUTO FIX (THIS WAS MISSING)
-            corrected = reply.strip()
-
-            if "thank" not in text and rating >= 3:
-                corrected = "Thank you for your feedback. " + corrected
-
-            if rating <= 2 and not any(w in text for w in ["sorry", "apologize", "apologies", "regret"]):
-                corrected = "We sincerely apologize for your experience. " + corrected
-
-            if len(corrected.split()) < 10:
-                corrected += " We truly value your feedback and will work on improving our service."
-
-            logger.warning(f"Reply corrected: {issues}")
+            if not val_parsed or not isinstance(val_parsed, dict):
+                logger.warning("Compliance validation failed to parse JSON, falling back.")
+                return {"approved": False, "corrected_reply": reply}
 
             return {
-                "approved": False,
-                "corrected_reply": corrected,
-                "issues": issues
+                "approved": val_parsed.get("approved", False),
+                "corrected_reply": val_parsed.get("corrected_reply", reply),
+                "issues": [val_parsed.get("suggestions")] if val_parsed.get("suggestions") else [],
+                "manual_response_required": val_parsed.get("manual_response_required", False) 
             }
 
 
@@ -185,16 +152,13 @@ async def supervisor_agent(
             "store": store,}
         )
         
-        llm_result =  await _call_gemini(prompt)
+        llm_result =  await call_gemini(prompt, agent_name="supervisor_agent", expect_json=True)
 
         if not llm_result or llm_result.get("status") != "success":
             raise ValueError("LLM failed")
 
-        raw_text = llm_result.get("content", "")
-        raw_text = raw_text.replace("```json", "").replace("```", "").strip()
-
-        parsed = _parse_json(raw_text)
-        if not parsed:
+        parsed = llm_result.get("content", {})
+        if not parsed or not isinstance(parsed, dict):
             raise ValueError("Invalid JSON from LLM")
 
         validated = SupervisorResponse(**parsed)
@@ -224,3 +188,64 @@ async def supervisor_agent(
     }
     
     return _fallback_decision(review or "", rating,reviewer, store)
+
+# from app.core.state import ReviewState
+# from app.agents.supervisor_agent import supervisor_agent
+
+
+# class SupervisorAgent:
+
+#     async def run(self, state: ReviewState) -> ReviewState:
+
+#         state.current_agent = "supervisor"
+#         state.log("Supervisor started")
+
+#         # -------- DECISION --------
+#         if state.next_agent == "decision":
+
+#             result = await supervisor_agent(
+#                 review=state.review,
+#                 rating=state.rating,
+#                 reviewer=state.reviewer,
+#                 store=state.location_name,
+#                 mode="analyze"
+#             )
+
+#             state.decision = result
+#             state.add_history("supervisor", "decision", result)
+
+#             # routing
+#             if state.rating and state.rating <= 2:
+#                 state.next_agent = "complaint"
+#             else:
+#                 state.next_agent = "reply"
+
+#             return state
+
+#         # -------- VALIDATION --------
+#         if state.next_agent == "validation":
+
+#             result = await supervisor_agent(
+#                 review=state.review,
+#                 rating=state.rating,
+#                 reviewer=state.reviewer,
+#                 store=state.location_name,
+#                 reply=state.draft_response,
+#                 mode="validate"
+#             )
+
+#             state.validation = result
+#             state.add_history("supervisor", "validation", result)
+
+#             if result.get("approved", True):
+#                 state.final_response = state.draft_response
+#             else:
+#                 state.final_response = result.get(
+#                     "corrected_reply",
+#                     state.draft_response
+#                 )
+
+#             state.complete()
+#             return state
+
+#         return state

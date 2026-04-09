@@ -58,17 +58,34 @@ def _build_complaint_payload(
         "complainAbout": "Others",
         "complainSource": "Google Review",
         "complainRecieveDate": review_date.isoformat(),
-        "complaintantExpectation": review_text[:300],
+        "complaintantExpectation": str(review_text)[:300] if review_text else "",
         "complaintantAdvocateDetails": {},
     }
 
+# def _extract_ticket_id(response: dict) -> Optional[str]:
+#     return (
+#         response.get("data", {})
+#         .get("complainAndEnquirySaved", {})
+#         .get("complain", {})
+#         .get("id")
+#     )
 def _extract_ticket_id(response: dict) -> Optional[str]:
-    return (
-        response.get("data", {})
-        .get("complainAndEnquirySaved", {})
-        .get("complain", {})
-        .get("id")
-    )
+    try:
+        data = response.get("data") or {}
+        complain_saved = data.get("complainAndEnquirySaved") or {}
+        complain = complain_saved.get("complain") or {}
+
+        ticket_id = complain.get("id")
+
+        if not ticket_id:
+            logger.warning(f"⚠️ Ticket ID missing. Response: {response}")
+
+        return ticket_id
+
+    except Exception as e:
+        logger.error(f"❌ Error extracting ticket id: {e}")
+        logger.debug(f"Full response: {response}")
+        return None
 
  
 async def create_complaint(
@@ -90,7 +107,8 @@ async def create_complaint(
         ))),
     }
     
-    async with httpx.AsyncClient(timeout=10.0, connect=5.0) as client:
+    timeout_config = httpx.Timeout(10.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout_config) as client:
 
         for attempt in range(retries):
             try:
@@ -103,10 +121,7 @@ async def create_complaint(
                     data = response.json()
                 except Exception:
                     logger.error(f"[{job_id}] Invalid JSON response")
-                    return {
-                        "status": "failed",
-                        "message": "Invalid CRM response format"
-                    }
+                    raise ValueError("Invalid CRM response format")
 
                 ticket_id = _extract_ticket_id(data)
 
@@ -142,7 +157,8 @@ async def create_complaint(
                 logger.exception(f"[{job_id}] Unexpected CRM error")
 
             # exponential backoff
-            await asyncio.sleep(2 ** attempt)
+            if attempt < retries - 1:
+                await asyncio.sleep(2 ** attempt)
 
     logger.error(f"[{job_id}] Complaint failed after {retries} retries")
 
