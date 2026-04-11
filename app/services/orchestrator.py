@@ -281,12 +281,12 @@ async def _validate_reply(state: ReviewState) -> str:
         issue_type = getattr(state, "issue_type", "other")
 
         final = await compliance_agent(
-            review=state.review,
-            rating=state.rating,
+            # review=state.review,
+            # rating=state.rating,
             draft_reply=state.draft_response,   # or reply=... based on your function
-            issue_type=issue_type,
-            reviewer=state.reviewer,
-            store=state.location_name
+            # issue_type=issue_type,
+            # reviewer=state.reviewer,
+            # store=state.location_name
         )
 
         print("🔍 RAW COMPLIANCE OUTPUT:", final)
@@ -295,53 +295,53 @@ async def _validate_reply(state: ReviewState) -> str:
         if not final or not isinstance(final, dict):
             raise ValueError("Invalid compliance response format")
 
-        approved = final.get("approved", False)
-        corrected_reply = final.get("corrected_reply")
+        status = final.get("status")
         final_reply = final.get("final_reply")
-
         reason = final.get("reason", "No reason provided")
-        confidence = final.get("confidence", 0)
-
-        # -------- APPROVED --------
-        if approved:
+        
+        # ✅ STRICT STATUS CHECK
+        valid_status = {"approved", "modified", "blocked"}
+        if status not in valid_status:
+            raise ValueError(f"Invalid status from compliance_agent: {status}")
+        
+        # ✅ APPROVED
+        if status == "approved":
             state.log("Reply approved")
             state.add_history("validation", "approved", {
                 "reply": state.draft_response,
-                "reason": reason,
-                "confidence": confidence
+                "reason": reason
             })
             return state.draft_response
 
+        # ✅ MODIFIED
+        if status == "modified" and final_reply:
+            # 🔒 Guardrail: prevent regeneration
+            if not _is_safe_modification(state.draft_response, final_reply):
+                state.log("Regeneration detected → forcing approved")
+                state.add_history("validation", "forced_approved", {
+                    "reason": "agent2_regeneration_detected"
+                })
+                return state.draft_response
 
-
-        if corrected_reply:
-            state.log("Reply corrected")
-            state.add_history("validation", "corrected", {
+            state.log("Reply modified")
+            state.add_history("validation", "modified", {
                 "original": state.draft_response,
-                "corrected": corrected_reply,
-                "reason": reason,
-                "confidence": confidence
-            })
-            return corrected_reply
-
-        if final_reply:
-            state.log("Using fallback reply from compliance")
-            state.add_history("validation", "fallback", {
-                "final_reply": final_reply,
-                "reason": reason,
-                "confidence": confidence
+                "modified": final_reply,
+                "reason": reason
             })
             return final_reply
         
-        state.log("No valid reply from compliance, using original draft")
-        
-        state.add_history("validation", "fallback", {
-            "final_reply": state.draft_response,
-            "reason": "No usable response"
-        })
-        
-        return state.draft_response
+         # ❌ BLOCKED
+        if status == "blocked":
+            state.log("Reply blocked")
+            state.add_history("validation", "blocked", {
+                "reason": reason
+            })
+            return "We request you to raise a ticket so our team can assist you further."
 
+        # ⚠️ Fallback
+        state.log("Unknown status → using draft")
+        return state.draft_response
 
     except Exception as e:
         # 🚨 CLEAR ERROR LOGGING
@@ -356,88 +356,24 @@ async def _validate_reply(state: ReviewState) -> str:
         # ✅ SAFE FALLBACK (keep original reply)
         return state.draft_response
 
-# async def _validate_reply(state: ReviewState) -> str:
-#     print("Validating reply")
-#     state.log("Validation started")
+def _is_safe_modification(original: str, modified: str) -> bool:
+    if not original or not modified:
+        return False
 
-#     try:
-#         issue_type = getattr(state, "issue_type", "other")
+    # Length control (max 30% change)
+    if len(modified) > len(original) * 1.3:
+        return False
 
-#         final = await compliance_agent(
-#             review=state.review,
-#             rating=state.rating,
-#             reviewer=state.reviewer,
-#             issue_type=issue_type,
-#             store=state.location_name,
-#             draft_reply=state.draft_response,
-            
-#         ) or {}
+    # Word overlap check
+    orig_words = set(original.lower().split())
+    mod_words = set(modified.lower().split())
 
-#         print("#"*100)
-#         print(f"Validation result: {final} ")
-#         # -------- APPROVED --------
+    common = orig_words & mod_words
 
-#         approved = final.get("approved", True)
-#         corrected = final.get("corrected_reply")
-#         reason = final.get("reason", "No reason provided")
-#         confidence = final.get("confidence")
+    if len(common) < len(orig_words) * 0.5:
+        return False
 
-#         # ✅ handle same reply case
-#         if corrected and corrected.strip() == state.draft_response.strip():
-#             corrected = None
-
-
-#         # -------- APPROVED --------
-#         if approved and not corrected:
-#             state.log("Reply approved")
-#             state.set_metric("validation", "approved", True)
-
-#             state.add_history("validation", "approved", {
-#                 "approved": True,
-#                 "final_reply": state.draft_response,
-#                 "reason": reason,
-#                 "confidence": confidence
-#             })
-
-#             return state.draft_response
-        
-#         # -------- CORRECTED --------
-#         if corrected:
-#             state.log("Reply corrected by compliance")
-#             state.set_metric("validation", "corrected", True)
-            
-#             state.add_history("validation", "corrected", {
-#                 "approved": False,
-#                 "original_reply": state.draft_response,
-#                 "corrected_reply": corrected,
-#                 "reason": reason,
-#                 "confidence": confidence
-#             })
-
-#             return corrected
-
-
-#         # -------- FALLBACK --------
-#         fallback_reply = "Thank you for your feedback. We will look into this."
-
-#         state.log("Validation fallback used")
-#         state.add_history("validation", "fallback", {
-#             "approved": False,
-#             "fallback_reply": fallback_reply,
-#             "reason": "No valid response from supervisor"
-#         })
-
-#         return fallback_reply
-
-#     except Exception as e:
-#         state.log(f"Validation failed: {str(e)}")
-#         state.set_metric("validation", "error", str(e))
-#         state.add_history("validation", "error", {
-#             "error": str(e),
-#             "fallback_reply": state.draft_response
-#         })
-
-#         return state.draft_response  # fail-safe
+    return True
     
 # =========================
 # REPLY QUALITY CHECK
