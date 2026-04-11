@@ -175,7 +175,7 @@ state.log("Supervisor validation completed")
 ```
 ### 🔄 End-to-End Flow
 
-```json 
+```code 
 User Request
    ↓
 API Layer
