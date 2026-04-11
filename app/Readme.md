@@ -23,10 +23,10 @@ This project implements a **Multi-Agent System** to process customer reviews and
 ## 🏗️ Architecture Overview
 
 
-Client Request (API)
-↓
-FastAPI Endpoint (/process-review)
-↓
+### Client Request (API)
+## ↓
+### FastAPI Endpoint (/process-review)
+## ↓
 ReviewState Initialization
 ↓
 Agent 1 (Decision + Draft Reply)
@@ -40,7 +40,7 @@ Final Response
 
 ## 📂 Project Structure
 
-
+```json 
 app/
 │
 ├── main.py # FastAPI entry point
@@ -59,7 +59,7 @@ app/
 │
 ├── utils/
 │ └── logger.py # Logging utilities
-
+```
 
 ---
 
@@ -77,7 +77,11 @@ app/
   "location_name": "Anna Nagar",
   "review_date": "2024-01-01"
 }
-📤 Response Format
+```
+### 📤 Response Format
+
+---
+```json
 {
   "status": "success",
   "data": {
@@ -87,11 +91,15 @@ app/
     "reply": "We’re sorry for your experience..."
   }
 }
-🔷 Core Components
-1. 🧠 ReviewState (State Management)
+```
+
+---
+# 🔷 Core Components
+## 1. 🧠 ReviewState (State Management)
 
 Central object shared across agents.
 
+```code
 class ReviewState:
     review: str
     rating: int
@@ -106,34 +114,39 @@ class ReviewState:
     final_reply: str = None
 
     retry_count: dict = {}
-2. 🤖 Agent 1 — Decision + Draft Reply
+```
+---
+### 2. 🤖 Agent 1 — Decision + Draft Reply
+---
+***Responsibilities:***
 
-Responsibilities:
-
-Classify sentiment
-Detect issue type
-Extract up to 3 issues
-Generate draft reply
+- Classify sentiment
+- Detect issue type
+- Extract up to 3 issues
+- Generate draft reply
 
 Output:
 
-sentiment
-issue_type
-issues
-draft_reply
-3. 🛡️ Agent 2 — Supervisor / Validator
+- sentiment
+- issue_type
+- issues
+- draft_reply
+---
+## 3. 🛡️ Agent 2 — Supervisor / Validator
 
 Responsibilities:
 
-Validate draft reply
-Apply brand tone
-Fix issues if needed
-Provide fallback on failure
+- Validate draft reply
+- Apply brand tone
+- Fix issues if needed
+- Provide fallback on failure
 
-⚠️ Important Rule:
-Agent 2 does NOT generate from scratch — only validates and corrects.
+## ⚠️ Important Rule:
+### Agent 2 does NOT generate from scratch — only validates and corrects.
+---
 
-4. 🔄 Orchestrator (Pipeline)
+# 4. 🔄 Orchestrator (Pipeline)
+```code 
 async def process_pipeline(state: ReviewState):
     await decision_agent(state)
     await supervisor_agent(state)
@@ -150,13 +163,18 @@ for attempt in range(max_retries):
 Fallback
 Returns safe default response
 Example: "Fallback due to error"
-🧾 Logging
+```
+# 🧾 Logging
 
 Each stage logs progress:
-
+```json 
 state.log("Reply generation started")
 state.log("Supervisor validation completed")
-🔄 End-to-End Flow
+
+```
+### 🔄 End-to-End Flow
+
+```json 
 User Request
    ↓
 API Layer
@@ -175,7 +193,10 @@ Agent 2
 Final Response
    ↓
 Return to Client
-✅ Design Principles
+
+```
+## ✅ Design Principles
+``` json 
 Agent Separation
 Agent 1 → Processing
 Agent 2 → Validation
@@ -185,15 +206,11 @@ Everything flows through ReviewState
 Retry Safe
 Each agent is isolated
 Extensible
-Easy to add new agents
-🚀 Future Improvements
-Add confidence score
-Use structured LLM output (Pydantic)
-Add async parallel agents
-Add audit logs for compliance
-Add analytics agent
-🛠️ Setup Instructions
-# Clone repo
+
+```
+# 🛠️ Setup Instructions
+### Clone repo
+```json
 git clone https://github.com/manisandy2/multi-agent_02.git
 
 cd multi-agent_02
@@ -210,11 +227,13 @@ pip install -r requirements.txt
 
 # Run server
 uvicorn app.main:app --reload
-👨‍💻 Author
 
-Manikandan R.
+```
+## 👨‍💻 Author
+
+### Manikandan R.
 Backend Developer | Multi-Agent Systems | AWS | Python
 
-📄 License
+## 📄 License
 
 This project is open-source and available under the MIT License.
