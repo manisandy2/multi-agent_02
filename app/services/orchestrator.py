@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 from app.agents.reply_agent import reply_agent
 from app.tools.crm_tool import complaint_agent
-from app.agents.supervisor_agent import supervisor_agent
+from app.agents.supervisor_agent import decision_agent,compliance_agent
 from app.utility.helper import build_complaint_link
 from app.core.state import ReviewState
 
@@ -16,82 +16,108 @@ logger = logging.getLogger(__name__)
 async def process_review_task(data:dict) -> dict:
     state = ReviewState(data)
 
-    print("Initial State:###############################################")
-
     job_id = state.job_id
     state.log("Processing started")
 
+    print(f"\n🚀 START PROCESSING | Job ID: {job_id}")
+    print("=" * 80)
+
+
     try:
-        
-        # -------------------------
-        # SUPERVISOR (DECISION)
-        # -------------------------
-        decision = await _get_decision(state)
-
-        state.add_history("decision", "done", decision)
-        print("After Decision: ##############################################")
-        print(state.data)
-        print(state.review)
-        print(state.rating)
-
-        print("#"*100)
-        # -------------------------
-        # COMPLAINT (OPTIONAL)
-        # -------------------------
-        # complaint_link = None
-
-        # if decision.get("create_ticket"):
-        #     complaint_link = await _safe_create_complaint(data, job_id)
-        # else:
-        #     complaint_task = asyncio.sleep(0, result=None)
-
-
-        # -------------------------
-        # SENSITIVE CHECK
-        # -------------------------
-
+        # =========================
+        # 🔍 STEP 0: SENSITIVE CHECK
+        # =========================
+        print("🔍 Checking for sensitive content...")
         if _is_sensitive(state.review):
-            state.set_error("Sensitive content")
-            return _blocked_response(job_id, decision)
+            print("⛔ Sensitive content detected. Blocking response.")
+            return _blocked_response(job_id, {})
         
-        # -------------------------
-        # PARALLEL TASKS
-        # -------------------------
+        # =========================
+        # 🧠 STEP 1: DECISION (LLM)
+        # =========================
+        print("🧠 Generating decision...")
+
+        decision = await decision_agent(
+            review=state.review,
+            rating=state.rating,
+            reviewer=state.reviewer,
+            store=state.location_name
+        )
+
+
+        print("✅ Decision Output:", decision)
+
+        state.add_history("decision", "completed", decision)
+        state.set_metric("decision", "success", True)
+
+        state.issue_type = decision.get("classification", {}).get("issue_type", "other")
+
+        # =========================
+        # 📌 STEP 2: COMPLAINT (OPTIONAL)
+        # =========================
+        print("\n📌 STEP 2: Complaint Check")
+        
 
         complaint_task = (
             _safe_create_complaint(state)
             if decision.get("create_ticket")
             else asyncio.sleep(0, result=None)
         )
+        print("\n✍️ STEP 3: Generating Reply")
 
         # -------------------------
-        # REPLY (ALWAYS)
+        # ✍️ STEP 3: REPLY GENERATION
         # -------------------------
-        print("Generating reply 01 ##############################################")
-        reply_task =  _generate_reply(state)
 
         complaint_link, reply = await asyncio.gather(
             complaint_task,
-            reply_task)
+            _generate_reply(state))
 
-        # -------------------------
-        # ADD LINK (NO RE-GENERATION)
-        # -------------------------
-        state.draft_response = reply
-        print("Generating reply 02 ##############################################")
-        if complaint_link and reply:
-            state.draft_response += f"{reply} Kindly share more details here: {complaint_link}"
+        if not reply:
+            print("⚠️ Reply generation failed, using fallback")
+            reply = "Thank you for your feedback. We will look into this."
 
-
-
-        # -------------------------
-        # SUPERVISOR (VALIDATE + FIX)
-        # -------------------------
-        state.final_response = await _validate_reply(
-            state
-        )
-        state.complete()
+        print("📝 Draft Reply:",reply)
         
+        print("🔗 Complaint Link:",complaint_link)
+        
+        # =========================
+        # 🔗 STEP 4: ADD LINK (FIXED)
+        # =========================
+        print("\n🔗 STEP 4: Attach Complaint Link")
+        
+        if complaint_link:
+            state.draft_response = f"{reply} Kindly share more details here: {complaint_link}"
+        else:
+            state.draft_response = reply
+
+        print("📄 Draft with Link:",state.draft_response)
+
+        # =========================
+        # 🧹 STEP 5: CLEAN REPLY
+        # =========================
+        print("\n🧹 STEP 5: Cleaning Reply")
+
+        state.draft_response = clean_reply(state.draft_response)
+
+        print("✨ Cleaned Reply:",state.draft_response)
+
+        # =========================
+        # 👮 STEP 6:  VALIDATION
+        # =========================
+        print("👮 Validating reply...")
+
+        final_reply = await _validate_reply(state)
+
+        state.final_response = final_reply
+
+        print("🎯 FINAL RESPONSE:", state.final_response)
+
+        state.set_metric("validation", "completed", True)
+
+        print("=" * 80)
+        print(f"✅ DONE | Job ID: {job_id}\n")
+
         return {
             "job_id": job_id,
             "status": "success",
@@ -102,7 +128,6 @@ async def process_review_task(data:dict) -> dict:
             "logs": state.logs,
             "history": state.history,
         }
-
     except Exception as e:
         logger.exception(f"[{job_id}] Processing failed")
         state.set_error(str(e))
@@ -112,47 +137,6 @@ async def process_review_task(data:dict) -> dict:
             message="Processing failed",
             details=str(e),
         )
-    
-# =========================
-# SUPERVISOR DECISION
-# =========================
-async def _get_decision(state: ReviewState) -> dict:
-
-    decision = await supervisor_agent(
-        review=state.review,
-        rating=state.rating,
-        reviewer=state.reviewer,
-        store=state.location_name,
-        mode="analyze"
-    ) or {}
-
-    decision = _enforce_rules(decision, state.rating)
-
-    state.add_history("decision", "On process", decision)
-    state.add_history("review", "start", state.review)
-    state.add_history("decision", "completed", decision)
-    state.log("Decision generated")
-
-    return decision
-
-
-# =========================
-# Rule Enforcement
-# =========================
-def _enforce_rules(decision: dict, rating: int) -> dict:
-    logger.debug(f"Enforcing rules for rating: {rating}")
-    if rating <= 2:
-        decision.update({
-        "create_ticket" : True,
-        "action" : "complaint_and_reply",
-        "severity" : "high",
-        })
-    else:
-        decision.update({
-        "create_ticket" : False,
-        "action" : "reply",
-        })
-    return decision
 
 # =========================
 # SENSITIVE CHECK
@@ -173,23 +157,22 @@ def _blocked_response(job_id, decision):
     }
 
 # =========================
-# SAFE COMPLAINT
+# REPLY CLEANING
 # =========================
-# async def _safe_create_complaint(data: dict, job_id: str) -> str | None:
-#     try:
-#         ticket = await complaint_agent(data)
+def clean_reply(text: str) -> str:
+    sentences = text.split(". ")
+    seen = set()
+    result = []
 
-#         if ticket.get("status") == "created":
-#             ticket_id = ticket.get("ticket_id")
-#             if ticket_id:
-#                 return build_complaint_link(ticket_id)
+    for s in sentences:
+        s = s.strip()
+        if s and s not in seen:
+            seen.add(s)
+            result.append(s)
 
-#         logger.warning(f"[{job_id}] Complaint not created")
-#         return None
+    return ". ".join(result)
 
-#     except Exception as e:
-#         logger.error(f"[{job_id}] Complaint failed: {e}")
-#         return None
+
 async def _safe_create_complaint(state: ReviewState) -> Optional[str]:
     print("Creating complaint ##############################################")
     state.log("Complaint creation started")
@@ -235,50 +218,9 @@ async def _safe_create_complaint(state: ReviewState) -> Optional[str]:
 
     return None
 
-# =========================
-# REPLY GENERATION
-# =========================
-# async def _generate_reply(
-#     # review: str,
-#     # rating: int,
-#     # reviewer: str,
-#     # store: str,
-#     # complaint_link: str = None,
-#     state: ReviewState
-# ) -> str:
-#     print("start Generating reply ##############################################")
-#     state.log("Reply generation started")
-#     for _ in range(2):  # retry max 2 times
-#         try:
-#             reply = await reply_agent(
-#                 state.review,
-#                 state.rating,
-#                 state.reviewer,
-#                 state.store,
-                
-#             )
-
-#             if reply and isinstance(reply, str):
-#                 reply = reply.strip()
-
-#                 if not _is_bad_reply(reply, state.rating):
-#                     state.log("Reply generated successfully")
-#                     state.set_metric("reply", "success", True)
-#                     state.add_history("reply", "generated")
-#                     return reply
-#                 state.log("Bad reply detected, retrying...")
-
-#         except Exception as e:
-#             logger.warning(f"Reply generation failed: {e}")
-
-#     # fallback
-#     if complaint_link:
-#         return f"Thank you for your feedback. Please contact us here: {complaint_link}"
-
-#     return "Thank you for your feedback. We will look into this."
 
 async def _generate_reply(state: ReviewState) -> str:
-    print("start Generating reply ##############################################")
+    print("✍️ Generating reply...")
     state.log("Reply generation started")
 
     max_retries = 2
@@ -286,9 +228,16 @@ async def _generate_reply(state: ReviewState) -> str:
     for attempt in range(max_retries):
         try:
             state.increment_retry("reply")
+            state.log(f"Reply attempt {attempt+1}")
+            issue_type = getattr(state, "issue_type", "other")
 
             reply = await reply_agent(
-                state
+                review=state.review,
+                rating=state.rating,
+                reviewer=state.reviewer,
+                store=state.location_name,
+                issue_type=issue_type
+
             )
 
             if reply and isinstance(reply, str):
@@ -297,7 +246,7 @@ async def _generate_reply(state: ReviewState) -> str:
                 if not _is_bad_reply(reply, state.rating):
                     state.log("Reply generated successfully")
                     state.set_metric("reply", "success", True)
-                    state.add_history("reply", "generated")
+                    #state.add_history("reply", "generated", reply)
 
                     return reply
 
@@ -311,83 +260,184 @@ async def _generate_reply(state: ReviewState) -> str:
 
     # -------- FALLBACK --------
     state.log("Using fallback reply")
-    state.add_history("reply", "fallback")
 
-    if state.rating and state.rating <= 2:
-        return "We're sorry for your experience. Please share more details so we can assist you."
+    fallback_reply = (
+        "We're sorry for your experience. Please share more details so we can assist you."
+        if state.rating and state.rating <= 2
+        else "Thank you for your feedback. We will look into this."
+    )
 
-    return "Thank you for your feedback. We will look into this."
+    state.add_history("reply", "fallback", fallback_reply)
+    state.set_metric("reply", "fallback_used", True)
 
-# =========================
-# VALIDATION + CORRECTION
-# =========================
-# async def _validate_reply(review, rating, reviewer, store, reply):
+    return fallback_reply
 
-#     try:
-#         final = await supervisor_agent(
-#             review=review,
-#             rating=rating,
-#             reviewer=reviewer,
-#             store=store,
-#             reply=reply,
-#             mode="validate",
-#         ) or {}
-
-#         if final.get("approved", True):
-#             return reply
-
-#         return final.get(
-#             "corrected_reply",
-#             "Thank you for your feedback. We will look into this."
-#         )
-
-#     except Exception as e:
-#         logger.warning(f"Validation failed: {e}")
-#         return reply  # fail-safe
 
 async def _validate_reply(state: ReviewState) -> str:
-    print("Validating reply ##############################################")
+    print("👮 Validating reply...")
     state.log("Validation started")
 
     try:
-        final = await supervisor_agent(
+        issue_type = getattr(state, "issue_type", "other")
+
+        final = await compliance_agent(
             review=state.review,
             rating=state.rating,
+            draft_reply=state.draft_response,   # or reply=... based on your function
+            issue_type=issue_type,
             reviewer=state.reviewer,
-            store=state.location_name,
-            reply=state.draft_response,
-            mode="validate",
-        ) or {}
-        print(f"Validation result: {final} ##############################################")
-        # -------- APPROVED --------
-        if final.get("approved", True):
-            state.log("Reply approved")
-            state.set_metric("validation", "approved", True)
-            state.add_history("validation", "approved")
+            store=state.location_name
+        )
 
+        print("🔍 RAW COMPLIANCE OUTPUT:", final)
+
+        # 🚨 HARD CHECK
+        if not final or not isinstance(final, dict):
+            raise ValueError("Invalid compliance response format")
+
+        approved = final.get("approved", False)
+        corrected_reply = final.get("corrected_reply")
+        final_reply = final.get("final_reply")
+
+        reason = final.get("reason", "No reason provided")
+        confidence = final.get("confidence", 0)
+
+        # -------- APPROVED --------
+        if approved:
+            state.log("Reply approved")
+            state.add_history("validation", "approved", {
+                "reply": state.draft_response,
+                "reason": reason,
+                "confidence": confidence
+            })
             return state.draft_response
 
-        # -------- CORRECTED --------
-        corrected = final.get("corrected_reply")
 
-        if corrected:
-            state.log("Reply corrected by supervisor")
-            state.set_metric("validation", "corrected", True)
-            state.add_history("validation", "corrected")
 
-            return corrected
+        if corrected_reply:
+            state.log("Reply corrected")
+            state.add_history("validation", "corrected", {
+                "original": state.draft_response,
+                "corrected": corrected_reply,
+                "reason": reason,
+                "confidence": confidence
+            })
+            return corrected_reply
 
-        # -------- FALLBACK --------
-        state.log("Validation fallback used")
-        state.add_history("validation", "fallback")
+        if final_reply:
+            state.log("Using fallback reply from compliance")
+            state.add_history("validation", "fallback", {
+                "final_reply": final_reply,
+                "reason": reason,
+                "confidence": confidence
+            })
+            return final_reply
+        
+        state.log("No valid reply from compliance, using original draft")
+        
+        state.add_history("validation", "fallback", {
+            "final_reply": state.draft_response,
+            "reason": "No usable response"
+        })
+        
+        return state.draft_response
 
-        return "Thank you for your feedback. We will look into this."
 
     except Exception as e:
+        # 🚨 CLEAR ERROR LOGGING
+        print("❌ VALIDATION ERROR:", str(e))
         state.log(f"Validation failed: {str(e)}")
-        state.set_metric("validation", "error", str(e))
 
-        return state.draft_response  # fail-safe
+        state.add_history("validation", "error", {
+            "error": str(e),
+            "raw_response": str(final) if 'final' in locals() else "No response"
+        })
+
+        # ✅ SAFE FALLBACK (keep original reply)
+        return state.draft_response
+
+# async def _validate_reply(state: ReviewState) -> str:
+#     print("Validating reply")
+#     state.log("Validation started")
+
+#     try:
+#         issue_type = getattr(state, "issue_type", "other")
+
+#         final = await compliance_agent(
+#             review=state.review,
+#             rating=state.rating,
+#             reviewer=state.reviewer,
+#             issue_type=issue_type,
+#             store=state.location_name,
+#             draft_reply=state.draft_response,
+            
+#         ) or {}
+
+#         print("#"*100)
+#         print(f"Validation result: {final} ")
+#         # -------- APPROVED --------
+
+#         approved = final.get("approved", True)
+#         corrected = final.get("corrected_reply")
+#         reason = final.get("reason", "No reason provided")
+#         confidence = final.get("confidence")
+
+#         # ✅ handle same reply case
+#         if corrected and corrected.strip() == state.draft_response.strip():
+#             corrected = None
+
+
+#         # -------- APPROVED --------
+#         if approved and not corrected:
+#             state.log("Reply approved")
+#             state.set_metric("validation", "approved", True)
+
+#             state.add_history("validation", "approved", {
+#                 "approved": True,
+#                 "final_reply": state.draft_response,
+#                 "reason": reason,
+#                 "confidence": confidence
+#             })
+
+#             return state.draft_response
+        
+#         # -------- CORRECTED --------
+#         if corrected:
+#             state.log("Reply corrected by compliance")
+#             state.set_metric("validation", "corrected", True)
+            
+#             state.add_history("validation", "corrected", {
+#                 "approved": False,
+#                 "original_reply": state.draft_response,
+#                 "corrected_reply": corrected,
+#                 "reason": reason,
+#                 "confidence": confidence
+#             })
+
+#             return corrected
+
+
+#         # -------- FALLBACK --------
+#         fallback_reply = "Thank you for your feedback. We will look into this."
+
+#         state.log("Validation fallback used")
+#         state.add_history("validation", "fallback", {
+#             "approved": False,
+#             "fallback_reply": fallback_reply,
+#             "reason": "No valid response from supervisor"
+#         })
+
+#         return fallback_reply
+
+#     except Exception as e:
+#         state.log(f"Validation failed: {str(e)}")
+#         state.set_metric("validation", "error", str(e))
+#         state.add_history("validation", "error", {
+#             "error": str(e),
+#             "fallback_reply": state.draft_response
+#         })
+
+#         return state.draft_response  # fail-safe
     
 # =========================
 # REPLY QUALITY CHECK
@@ -396,12 +446,25 @@ def _is_bad_reply(reply: str, rating: int) -> bool:
     if not reply:
         return True
 
+    reply = reply.strip()
     words = reply.split()
 
-    if len(words) < 15:
+    # Too short
+    if len(words) < 10:
         return True
 
-    if rating <= 2 and "sorry" not in reply.lower():
+    # Must have at least one sentence
+    if "." not in reply:
+        return True
+
+    # Negative reviews must have empathy
+    if rating <= 2:
+        if not any(word in reply.lower() for word in ["sorry", "apolog", "regret"]):
+            return True
+
+    # Duplicate sentence check
+    sentences = [s.strip() for s in reply.split(".") if s.strip()]
+    if len(sentences) != len(set(sentences)):
         return True
 
     return False

@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 # Prompt Builder
 # =========================
 
-def build_prompt(review: str | None, rating: int, reviewer: str | None, store: str | None, complaint_link: str | None) -> str:
+def build_prompt(review: str | None, rating: int, 
+                reviewer: str | None, store: str | None,
+                issue_type: str,
+                complaint_link: str | None) -> str:
     review = review or ""
     safe_review = " ".join(review.strip().split())
 
@@ -20,6 +23,7 @@ def build_prompt(review: str | None, rating: int, reviewer: str | None, store: s
         store=store or "our store",
         rating=rating,
         review=safe_review,
+        issue_type=issue_type,
         complaint_instruction=instruction,
     )
 
@@ -76,35 +80,24 @@ async def reply_agent(
     rating: int,
     reviewer: str,
     store: str,
+    issue_type: str,
     complaint_link: Optional[str] = None,
 ) -> str:
    
-    prompt = build_prompt(review, rating, reviewer, store, complaint_link)
+    prompt = build_prompt(review, rating, reviewer, store,issue_type, complaint_link)
 
-    try:
-        llm_result = await call_gemini(prompt)
-
-        if llm_result.get("status") != "success":
-            raise ValueError("LLM failed")
-         
-        reply = llm_result.get("content", "").strip()
-        
-        if not reply or len(reply) < 10:
-            raise ValueError("Invalid reply")
-        
-
-    except Exception as e:
-        logger.error(
-            f"Reply agent failed | rating={rating}, store={store}, review={str(review)[:50] if review else 'None'}, error={e}"
-        )
-        return fallback_reply(rating, store, complaint_link)
-
-    reply = validate_reply(reply)
     
-    if not reply:
-        return fallback_reply(rating, store, complaint_link)
+    llm_result = await call_gemini(prompt)
 
-    if complaint_link and complaint_link not in reply:
-        reply = reply.rstrip(". ") + f". You can reach us here: {complaint_link}"
-
+    if llm_result.get("status") != "success":
+        raise ValueError("LLM failed")
+        
+    reply = llm_result.get("content", "").strip()
+    
+    if not reply or len(reply) < 10:
+        raise ValueError("Invalid reply")
+    
     return reply
+
+
+    
