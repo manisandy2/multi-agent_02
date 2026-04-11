@@ -281,12 +281,12 @@ async def _validate_reply(state: ReviewState) -> str:
         issue_type = getattr(state, "issue_type", "other")
 
         final = await compliance_agent(
-            # review=state.review,
-            # rating=state.rating,
+            review=state.review,
+            rating=state.rating,
             draft_reply=state.draft_response,   # or reply=... based on your function
-            # issue_type=issue_type,
-            # reviewer=state.reviewer,
-            # store=state.location_name
+            issue_type=issue_type,
+            reviewer=state.reviewer,
+            store=state.location_name
         )
 
         print("🔍 RAW COMPLIANCE OUTPUT:", final)
