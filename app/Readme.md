@@ -40,7 +40,7 @@ Final Response
 
 ## 📂 Project Structure
 
-```json 
+```code 
 app/
 │
 ├── main.py # FastAPI entry point
