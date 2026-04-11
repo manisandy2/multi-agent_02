@@ -22,11 +22,11 @@ This project implements a **Multi-Agent System** to process customer reviews and
 
 ## 🏗️ Architecture Overview
 
-
-### Client Request (API)
-## ↓
-### FastAPI Endpoint (/process-review)
-## ↓
+```json 
+ Client Request (API)
+↓
+FastAPI Endpoint (/process-review)
+ ↓
 ReviewState Initialization
 ↓
 Agent 1 (Decision + Draft Reply)
@@ -35,7 +35,7 @@ Agent 2 (Supervisor / Validator)
 ↓
 Final Response
 
-
+```
 ---
 
 ## 📂 Project Structure
