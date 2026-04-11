@@ -81,7 +81,7 @@ app/
 ### 📤 Response Format
 
 ---
-```json
+```code
 {
   "status": "success",
   "data": {
@@ -167,7 +167,8 @@ Example: "Fallback due to error"
 # 🧾 Logging
 
 Each stage logs progress:
-```json 
+
+```code 
 state.log("Reply generation started")
 state.log("Supervisor validation completed")
 
@@ -196,8 +197,7 @@ Return to Client
 
 ```
 ## ✅ Design Principles
-``` json 
-Agent Separation
+```text Agent Separation
 Agent 1 → Processing
 Agent 2 → Validation
 State-Driven Architecture
@@ -210,7 +210,7 @@ Extensible
 ```
 # 🛠️ Setup Instructions
 ### Clone repo
-```json
+```code
 git clone https://github.com/manisandy2/multi-agent_02.git
 
 cd multi-agent_02
