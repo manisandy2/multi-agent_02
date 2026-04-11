@@ -22,7 +22,7 @@ This project implements a **Multi-Agent System** to process customer reviews and
 
 ## 🏗️ Architecture Overview
 
-```json 
+```code 
  Client Request (API)
 ↓
 FastAPI Endpoint (/process-review)
